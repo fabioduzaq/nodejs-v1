@@ -10,6 +10,6 @@ const server = http.createServer((request, response) => {
   console.log(`Requested ${request.url}`);
 });
 
-server.listen(80);
+server.listen(3000);
 console.log('Server is now listening');
 
