@@ -1,15 +1,28 @@
-FROM      mhart/alpine-node:6.10
+# Usa a imagem base Node.js Bullseye
+FROM node:24-bullseye
 
-# Options:
-ARG       NODE_ENV=production
-ENV       NODE_ENV $NODE_ENV
-ENV       APP_HOME /hello-world
+# Instala o git e outras ferramentas úteis
+RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
 
-# Install Modules:
-WORKDIR   $APP_HOME
+# Instala o Next.js globalmente para acesso ao CLI
+RUN npm install -g next@latest
 
-# Copy in files:
-COPY      . $APP_HOME
+# Define o diretório de trabalho dentro do contêiner
+WORKDIR /usr/src/app
 
-EXPOSE    80
-CMD       ["node", "index.js"]
+# Copia o package.json e package-lock.json (se existirem) para instalar as dependências
+COPY package*.json ./
+
+# Instala as dependências do Node.js
+# Se você não tiver dependências, esta linha é opcional, mas recomendada
+RUN npm install
+
+# Copia todo o código-fonte do seu projeto para o diretório de trabalho
+COPY . .
+
+# Expõe a porta que sua aplicação utiliza
+EXPOSE 80
+
+# Este é o comando chave: ele define o que rodar quando o contêiner inicia
+# Garante que 'node server.js' seja executado automaticamente
+CMD ["node", "server.js"]

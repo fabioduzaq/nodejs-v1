@@ -1,3 +1,9 @@
-# Ignore everything except the index.js file
-*
-!index.js
+# Ignore common files but keep necessary ones
+node_modules
+npm-debug.log
+.git
+.gitignore
+README.md
+LICENSE
+.DS_Store
+*.md

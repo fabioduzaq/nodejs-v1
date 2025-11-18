@@ -12,3 +12,4 @@ const server = http.createServer((request, response) => {
 
 server.listen(80);
 console.log('Server is now listening');
+
