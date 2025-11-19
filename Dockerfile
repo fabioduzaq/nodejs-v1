@@ -7,22 +7,23 @@ RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
 # Instala o Next.js e Vite globalmente para acesso ao CLI
 RUN npm install -g next@latest vite@latest
 
-# Define o diretório de trabalho dentro do contêiner
-WORKDIR /root
+# Define o diretório de trabalho como a pasta do projeto Next.js
+# Isso garante que todos os comandos (incluindo o CMD final) sejam executados aqui.
+WORKDIR /root/app
 
-# Copia o package.json e package-lock.json (se existirem) para instalar as dependências
-COPY package*.json ./
+# Copia e instala dependências DENTRO do diretório do Next.js
+COPY app/package*.json ./
 
-# Instala as dependências do Node.js
-# Se você não tiver dependências, esta linha é opcional, mas recomendada
 RUN npm install
 
-# Copia todo o código-fonte do seu projeto para o diretório de trabalho
-COPY . .
+# Copia o restante do código-fonte do seu projeto
+COPY app/ .
+
+# EXIGÊNCIA PARA PRODUÇÃO: Executar o build
+RUN npm run build
 
 # Expõe a porta que sua aplicação utiliza
 EXPOSE 3000
 
-# Este é o comando chave: ele define o que rodar quando o contêiner inicia
-# Garante que 'node server.js' seja executado automaticamente
-CMD ["node", "server.js"]
+# NOVO COMANDO CHAVE: Inicia o servidor de produção do Next.js
+CMD ["npm", "start"]
