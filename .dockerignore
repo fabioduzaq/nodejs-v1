@@ -1,9 +1,23 @@
-# Ignore common files but keep necessary ones
-node_modules
-npm-debug.log
+# Arquivos de ambiente (contém tokens)
+.env
+.env.local
+.env.*.local
+
+# Git
 .git
 .gitignore
-README.md
-LICENSE
+
+# Logs
+logs/
+*.log
+
+# Node modules (se houver na raiz)
+node_modules/
+
+# Arquivos temporários
+*.tmp
+*.temp
 .DS_Store
-*.md
+
+# Documentação (manter README-MONITOR.md pode ser útil, mas não é necessário no build)
+# README*.md

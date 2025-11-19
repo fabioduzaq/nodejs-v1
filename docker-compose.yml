@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  app-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: app-monitor
+    ports:
+      - "3000:3000"
+    environment:
+      # Repositório Git
+      - GIT_REPO_URL=https://github.com/fabioduzaq/app-movaa-v2.git
+      - GIT_BRANCH=az-movaa-v2
+      - GIT_TOKEN=${GIT_TOKEN}
+      
+      # Configurações da aplicação
+      - PORT=3000
+      - CHECK_INTERVAL=60
+      - APP_DIR=/root/app
+    restart: unless-stopped
+    volumes:
+      # Persistir logs (opcional)
+      - ./logs:/tmp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+

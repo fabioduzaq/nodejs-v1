@@ -1,0 +1,19 @@
+# Arquivos de ambiente (contém tokens e senhas)
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Docker
+.dockerignore
+
+# Node modules (se houver na raiz)
+node_modules/
+
+# Arquivos temporários
+*.tmp
+*.temp
+
