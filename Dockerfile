@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     procps \
+    lsof \
     && rm -rf /var/lib/apt/lists/*
 
 # Instala o Next.js e Vite globalmente para acesso ao CLI
@@ -49,15 +50,91 @@ log() {
 
 # Para a aplicação
 stop_app() {
+    log "🛑 Parando aplicação..."
+    
+    # Mata processo pelo PID se existir (incluindo processos filhos)
     if [ -f "$PID_FILE" ]; then
         PID=$(cat $PID_FILE)
         if ps -p $PID > /dev/null 2>&1; then
-            log "🛑 Parando aplicação (PID: $PID)..."
-            kill $PID 2>/dev/null || true
-            wait $PID 2>/dev/null || true
+            log "   Parando processo principal (PID: $PID)..."
+            # Mata o processo e seu grupo (processos filhos)
+            kill -TERM -$PID 2>/dev/null || kill -TERM $PID 2>/dev/null || true
+            # Aguarda até 5 segundos para processo terminar graciosamente
+            for i in {1..5}; do
+                if ! ps -p $PID > /dev/null 2>&1; then
+                    break
+                fi
+                sleep 1
+            done
+            # Se ainda estiver rodando, força kill de todo o grupo
+            if ps -p $PID > /dev/null 2>&1; then
+                log "   Forçando término do processo $PID e seus filhos..."
+                kill -9 -$PID 2>/dev/null || kill -9 $PID 2>/dev/null || true
+                sleep 1
+            fi
         fi
         rm -f $PID_FILE
     fi
+    
+    # Mata TODOS os processos node/next/npm relacionados (aproximação mais agressiva)
+    log "   Verificando processos Node.js/Next.js órfãos..."
+    NODE_PROCS=$(ps aux | grep -E "[n]ode|[n]pm|[n]ext-server" | grep -v grep | awk '{print $2}' || echo "")
+    if [ -n "$NODE_PROCS" ]; then
+        log "   Encontrados processos Node.js/Next.js: $NODE_PROCS"
+        for NODE_PID in $NODE_PROCS; do
+            # Verifica se não é o próprio processo do monitor
+            if [ "$NODE_PID" != "$$" ] && [ "$NODE_PID" != "$BASHPID" ]; then
+                log "   Matando processo Node.js/Next.js órfão (PID: $NODE_PID)..."
+                kill -9 $NODE_PID 2>/dev/null || true
+            fi
+        done
+        sleep 2
+    fi
+    
+    # Mata todos os processos usando a porta (fallback robusto)
+    log "   Verificando processos na porta $PORT..."
+    PORT_USERS=$(lsof -ti:$PORT 2>/dev/null || true)
+    if [ -n "$PORT_USERS" ]; then
+        log "   Encontrados processos usando a porta: $PORT_USERS"
+        for PID_PORT in $PORT_USERS; do
+            log "   Matando processo $PID_PORT (e seu grupo) na porta $PORT..."
+            # Tenta matar o grupo primeiro
+            kill -TERM -$PID_PORT 2>/dev/null || kill -TERM $PID_PORT 2>/dev/null || true
+        done
+        sleep 3
+        # Força kill se ainda estiverem rodando
+        PORT_USERS=$(lsof -ti:$PORT 2>/dev/null || true)
+        if [ -n "$PORT_USERS" ]; then
+            for PID_PORT in $PORT_USERS; do
+                log "   Forçando kill do processo $PID_PORT na porta $PORT..."
+                kill -9 -$PID_PORT 2>/dev/null || kill -9 $PID_PORT 2>/dev/null || true
+            done
+            sleep 2
+        fi
+    fi
+    
+    # Aguarda a porta ficar livre com timeout de 10 segundos
+    MAX_WAIT=10
+    WAITED=0
+    while [ $WAITED -lt $MAX_WAIT ]; do
+        PORT_FREE=$(lsof -ti:$PORT 2>/dev/null || echo "")
+        if [ -z "$PORT_FREE" ]; then
+            log "✅ Porta $PORT liberada"
+            return 0
+        fi
+        sleep 1
+        WAITED=$((WAITED + 1))
+    done
+    
+    # Se ainda estiver em uso, última tentativa
+    PORT_FREE=$(lsof -ti:$PORT 2>/dev/null || echo "")
+    if [ -n "$PORT_FREE" ]; then
+        log "⚠️  Porta ainda em uso após $MAX_WAIT segundos. Forçando finalização..."
+        kill -9 $PORT_FREE 2>/dev/null || true
+        sleep 2
+    fi
+    
+    log "✅ Aplicação parada"
 }
 
 # Inicia a aplicação
@@ -91,6 +168,64 @@ start_app() {
             return 1
         }
         unset FORCE_REBUILD
+        
+        # Limpeza após build: durante o build processos podem ter sido criados
+        log "   Limpeza pós-build..."
+        NODE_PROCS=$(ps aux | grep -E "[n]ode|[n]pm|[n]ext-server" | grep -v grep | awk '{print $2}' || echo "")
+        if [ -n "$NODE_PROCS" ]; then
+            for NODE_PID in $NODE_PROCS; do
+                if [ "$NODE_PID" != "$$" ] && [ "$NODE_PID" != "$BASHPID" ]; then
+                    kill -9 $NODE_PID 2>/dev/null || true
+                fi
+            done
+            sleep 2
+        fi
+    fi
+    
+    # Limpeza agressiva: mata TODOS os processos node/next/npm antes de iniciar
+    log "   Limpeza final antes de iniciar..."
+    NODE_PROCS=$(ps aux | grep -E "[n]ode|[n]pm|[n]ext-server" | grep -v grep | awk '{print $2}' || echo "")
+    if [ -n "$NODE_PROCS" ]; then
+        log "   Encontrados processos Node.js restantes: $NODE_PROCS. Matando..."
+        for NODE_PID in $NODE_PROCS; do
+            if [ "$NODE_PID" != "$$" ] && [ "$NODE_PID" != "$BASHPID" ]; then
+                kill -9 $NODE_PID 2>/dev/null || true
+            fi
+        done
+        sleep 3
+    fi
+    
+    # Verifica se a porta está livre antes de iniciar (com verificação robusta)
+    PORT_CHECK=$(lsof -ti:$PORT 2>/dev/null || echo "")
+    if [ -n "$PORT_CHECK" ]; then
+        log "⚠️  Porta $PORT ainda em uso por processo(s): $PORT_CHECK. Aguardando liberação..."
+        sleep 3
+        PORT_CHECK=$(lsof -ti:$PORT 2>/dev/null || echo "")
+        if [ -n "$PORT_CHECK" ]; then
+            log "⚠️  Porta ainda em uso. Forçando parada dos processos $PORT_CHECK..."
+            for PID_PORT in $PORT_CHECK; do
+                # Mata processo e grupo
+                kill -9 -$PID_PORT 2>/dev/null || kill -9 $PID_PORT 2>/dev/null || true
+            done
+            sleep 3
+        fi
+    fi
+    
+    # Verificação final antes de iniciar
+    PORT_CHECK=$(lsof -ti:$PORT 2>/dev/null || echo "")
+    if [ -n "$PORT_CHECK" ]; then
+        log "❌ Erro: Porta $PORT ainda em uso por processo(s): $PORT_CHECK. Não é possível iniciar."
+        return 1
+    fi
+    
+    # Verificação final: não deve haver processos next-server rodando
+    NEXT_PROCS=$(ps aux | grep "[n]ext-server" | grep -v grep | awk '{print $2}' || echo "")
+    if [ -n "$NEXT_PROCS" ]; then
+        log "⚠️  Ainda há processos next-server rodando: $NEXT_PROCS. Matando..."
+        for NEXT_PID in $NEXT_PROCS; do
+            kill -9 $NEXT_PID 2>/dev/null || true
+        done
+        sleep 2
     fi
     
     # Configura a porta se necessário (para Next.js)
@@ -103,17 +238,46 @@ start_app() {
     echo $APP_PID > $PID_FILE
     
     # Aguarda um pouco para verificar se iniciou corretamente
-    sleep 3
-    if ps -p $APP_PID > /dev/null 2>&1; then
-        log "✅ Aplicação iniciada com sucesso (PID: $APP_PID)"
-        log "📋 Logs disponíveis em: $LOG_FILE"
-        return 0
-    else
-        log "❌ Aplicação não iniciou corretamente. Verifique os logs: $LOG_FILE"
+    sleep 5
+    
+    # Verifica se o processo ainda está rodando
+    if ! ps -p $APP_PID > /dev/null 2>&1; then
+        log "❌ Processo terminou inesperadamente. Verifique os logs: $LOG_FILE"
         cat $LOG_FILE
         rm -f $PID_FILE
         return 1
     fi
+    
+    # Verifica se a porta está em uso (pode demorar alguns segundos)
+    MAX_RETRIES=6
+    RETRY=0
+    PORT_USED=""
+    
+    while [ $RETRY -lt $MAX_RETRIES ]; do
+        PORT_USED=$(lsof -ti:$PORT 2>/dev/null || echo "")
+        if [ -n "$PORT_USED" ]; then
+            log "✅ Aplicação iniciada com sucesso (PID: $APP_PID, Porta: $PORT em uso)"
+            log "📋 Logs disponíveis em: $LOG_FILE"
+            return 0
+        fi
+        sleep 1
+        RETRY=$((RETRY + 1))
+    done
+    
+    # Se porta não estiver em uso, verifica se o processo está rodando e se há mensagem "Ready" no log
+    if ps -p $APP_PID > /dev/null 2>&1; then
+        # Verifica se há "Ready" no log da aplicação
+        if grep -q "Ready\|ready" $LOG_FILE 2>/dev/null; then
+            log "✅ Aplicação iniciada com sucesso (PID: $APP_PID, processo rodando)"
+            log "📋 Logs disponíveis em: $LOG_FILE"
+            return 0
+        fi
+    fi
+    
+    log "⚠️  Porta não confirmada, mas processo ainda rodando. Verificando logs..."
+    cat $LOG_FILE | tail -10
+    log "✅ Aplicação provavelmente iniciada (PID: $APP_PID ainda rodando)"
+    return 0
 }
 
 # Clona o repositório pela primeira vez
@@ -214,8 +378,30 @@ update_repo() {
         # Para a aplicação atual
         stop_app
         
-        # Aguarda um pouco antes de reiniciar
-        sleep 2
+        # Aguarda mais tempo antes de reiniciar para garantir liberação da porta
+        sleep 5
+        
+        # Verifica se porta está livre antes de reiniciar (com verificação robusta)
+        PORT_CHECK=$(lsof -ti:$PORT 2>/dev/null || echo "")
+        if [ -n "$PORT_CHECK" ]; then
+            log "⚠️  Porta ainda em uso após parada. Processos: $PORT_CHECK. Aguardando mais..."
+            sleep 3
+            PORT_CHECK=$(lsof -ti:$PORT 2>/dev/null || echo "")
+            if [ -n "$PORT_CHECK" ]; then
+                log "⚠️  Forçando liberação da porta. Matando processos: $PORT_CHECK..."
+                for PID_PORT in $PORT_CHECK; do
+                    kill -9 -$PID_PORT 2>/dev/null || kill -9 $PID_PORT 2>/dev/null || true
+                done
+                sleep 3
+                
+                # Verificação final antes de iniciar
+                PORT_CHECK=$(lsof -ti:$PORT 2>/dev/null || echo "")
+                if [ -n "$PORT_CHECK" ]; then
+                    log "⚠️  Porta ainda em uso após múltiplas tentativas. Aguardando mais 2 segundos..."
+                    sleep 2
+                fi
+            fi
+        fi
         
         # Reinicia a aplicação com as novas alterações
         start_app
@@ -306,3 +492,4 @@ EXPOSE 3000
 
 # Comando principal: inicia o monitoramento
 CMD ["/root/monitor.sh"]
+
